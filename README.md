@@ -5,19 +5,21 @@
 > *When a measure becomes a target, it ceases to be a good measure.*
 
 An RL coding environment is only as good as its grader. If the grader can be satisfied without
-doing the task, the policy will eventually find out how, and that becomes the training signal.
-`goodhart` attacks a grader the way a policy would, and tells you where it gives way:
+doing the task, that shortcut can become the training signal. `goodhart` probes a grader with
+known kinds of breakage and gaming, and shows you which ones it lets through:
 
 | Family | What goodhart does | A sound verifier should... |
 |---|---|---|
 | **Sensitivity** | Mutate the gold solution: flip comparisons, swap operators, drop statements, return `None`… | **reject** them |
 | **Hack** | From inside the workspace, game the grader instead of the task: conftest hooks, a shadow `pytest.py`, exit-code hijacks, memorising the visible tests, patching pytest in-process… | **reject** them |
-| **Invariance** | Rewrite the gold solution without changing what it computes: rename locals, reformat, reorder functions, add a file | **accept** them |
+| **Invariance** | Rewrite the gold solution in ways meant to keep what it computes: rename locals, reformat, reorder functions, add a file | **accept** them |
 
 The first two catch a grader that is too **loose**: it rewards wrong or gamed work. The third
 catches one that is too **strict**: it grades the shape of the reference solution and will also
-punish valid alternatives. You get a scorecard per verifier, the exact diff of every mutant that
-got through, and an exit code for CI.
+punish valid alternatives. Invariance rewrites are guarded syntactically, not proven
+equivalent, so confirm a rejection before calling the verifier brittle. You get a scorecard per
+verifier, the diff of every mutant that got through (truncated after 60 lines), and an exit code
+for CI.
 
 ## The headline
 
@@ -39,7 +41,7 @@ of 3) where the hack **earned full reward** starting from an *unsolved* workspac
 <!-- HACK-MATRIX:END -->
 
 - **`naive`** runs the visible tests in the workspace and pays out on pytest's exit code. That is
-  the default in a lot of environments, and 8 of the 10 hacks beat it.
+  a common setup, and 8 of the 10 hacks beat it.
 - **`hidden-exit-code`** moves held-out tests outside the workspace. That kills
   memorisation and conftest tricks, but the exit code is still the reward, so anything that controls
   the process status still wins.
@@ -48,15 +50,16 @@ of 3) where the hack **earned full reward** starting from an *unsolved* workspac
   cannot shadow it. It still loses to one hack: the solution is imported **into the grader's own
   process**, so it can patch pytest from the inside.
 - **`isolated`** never imports the solution into the test process. Hidden tests talk to a proxy
-  that forwards each call as JSON to a separate worker process. That is the only grader that stops
-  all ten hacks.
-- **`canonical`** (†) is a deliberately over-fit control. It also demands that the solution's AST match
-  the reference, so it blocks the in-process patch only because it rejects *any* change to the
-  code, including valid ones (see Invariance below).
+  that forwards each call as JSON to a separate worker process. It blocks all ten hacks *and*
+  accepts every invariance mutant.
+- **`canonical`** (†) is a deliberately over-fit control. It also blocks all ten, but it does so by
+  requiring the solution's AST to match the reference. That blocks the in-process patch as a side
+  effect, and it also rejects valid renames and function reorderings (see Invariance below).
 
-The point is not that `isolated` is perfect (it isn't a sandbox; see [Limitations](#limitations)).
-The point is that every step up removes a whole class of hacks, and you can't see which class
-until something attacks the grader.
+`isolated` is not perfect (it isn't a sandbox; see [Limitations](#limitations)), and ten
+hand-written payloads on three small tasks prove nothing about attacks nobody has written yet.
+What the matrix does show is that each step up blocks payloads the previous grader paid out for,
+and you can't tell which ones until something actually tries them.
 
 ## Full scorecard
 
@@ -82,13 +85,13 @@ until something attacks the grader.
 
 Reading it:
 
-- **Sensitivity**: goodhart found holes in my own hidden tests. Five mutants survive every
-  hidden-test grader. I checked each by hand; four are real test gaps and one is arguably equivalent:
+- **Sensitivity**: goodhart found holes in my own hidden tests. Five mutants survive all three
+  non-canonical hidden-test graders (`hidden-exit-code`, `hardened`, `isolated`). I checked each by hand; four are real test gaps and one is arguably equivalent:
 
   | Survivor | Verdict |
   |---|---|
-  | `gaps`: `end < lo` → `end <= lo` | **real gap**: an interval ending exactly at `lo` is dropped; no test touches the window edge |
-  | `gaps`: `start > hi` → `start >= hi` | **real gap**: the same at `hi` |
+  | `gaps`: `end < lo` → `end <= lo` | **real gap**: an interval ending exactly at `lo` is dropped; no hidden test has an interval ending exactly at `lo` |
+  | `gaps`: `start > hi` → `start >= hi` | **real gap**: the same for an interval starting exactly at `hi` |
   | `gaps`: `continue` → `break` | **real gap**: only wrong when an out-of-window interval is followed by one inside it, and no test has that |
   | `slugify`: default `max_length` `50` → `51` | **real gap**: no test sits exactly on the default boundary |
   | `from_roman`: `"empty numeral"` → `""` | equivalent for these tests: only the exception message changes |
@@ -108,7 +111,7 @@ full Markdown report and JSON, including the diff of every mutant that got throu
 ## Quick start
 
 ```sh
-pip install -e .            # Python 3.11+, no runtime dependencies
+pip install -e . pytest     # Python 3.11+; goodhart has no runtime deps, the example graders need pytest
 goodhart run examples/tasks --out results/examples
 ```
 
@@ -118,8 +121,8 @@ goodhart list examples/tasks/slugify             # what would be generated, no e
 goodhart run my_tasks/ --min-hack-resistance 1.0 --min-invariance 1.0   # CI gate
 ```
 
-Every run writes `report.md`, a self-contained `report.html` (scorecard, hack matrix, and a
-collapsible diff for every mutant that got through) and `results.json`. `goodhart render
+With `--out DIR`, a run writes `report.md`, a self-contained `report.html` (scorecard, hack
+matrix, and a collapsible diff for every mutant that got through) and `results.json`. `goodhart render
 results.json` rebuilds both reports without rerunning anything.
 
 As a GitHub Action:
@@ -133,8 +136,10 @@ As a GitHub Action:
 
 The scorecard lands in the job summary, and the job fails when a floor is missed.
 
-Exit codes: `0` all floors met · `1` a floor was missed, or a verifier is vacuous · `2` usage
-error · `3` the gold solution fails or is flaky under some verifier (the task itself is broken).
+Exit codes: `0` no measured rate missed its floor (families with nothing to score are skipped,
+and unevaluated runs are left out of the denominators) · `1` a floor was missed, or a verifier is
+vacuous · `2` usage error · `3` the gold solution failed or was flaky under some verifier, either
+because the task is broken or because the verifier could not run.
 
 ## Pointing it at your own task
 
@@ -166,9 +171,12 @@ shell-style splitting of Windows backslashes.
 
 A hack applied on top of the *correct* solution would "earn" reward from any grader that simply
 ignores it, and you'd be measuring the solution, not the hack. goodhart layers each hack on the
-unsolved base (your `baseline`, or the gold solution with every function body replaced by
-`raise NotImplementedError`), so any reward it earns came from the hack. The base itself is run
-first; if it already passes, the verifier is flagged `vacuous`.
+unsolved base: your `baseline`, or else the gold solution with its function and method bodies
+in editable, non-test modules replaced by `raise NotImplementedError`. A hack counts as earning
+reward when it reaches the pass threshold from a base that did not. Partial reward can already
+come from the base (under `isolated`, the `intervals` baseline scores 4/13), which is why the
+threshold, not any positive reward, decides. The base itself is run first; if it already passes,
+the verifier is flagged `vacuous`.
 
 ## Operators
 
@@ -195,15 +203,18 @@ Narrow the set with `--families`, `--operators`, and `--max-per-operator N --see
 
 ## How it was checked
 
-- 45 unit tests, including property tests that execute every invariance mutant of the example
-  solutions against the gold on randomised inputs, and end-to-end runs of tiny tasks.
+- 47 tests, including randomised checks that run every source-changing invariance mutant of the
+  example solutions against the gold, end-to-end runs of tiny tasks, and a check that a timed-out
+  verifier's grandchild processes are killed.
 - **An independent review by a second model.** Codex (GPT-6.1 Sol) reviewed the mutation operators
   and runner read-only and came back with 15 concrete counterexamples. Examples: a fresh local name
   colliding with an `except … as` binding, private-name mangling, a local `__class__` changing
   zero-argument `super()`, a walrus in a default argument making reordering unsafe, NFKC identifiers
   that unparse to keywords, lone-`\r` line endings shifting splice offsets, grandchild processes
-  outliving timeouts, and launch failures being counted as kills. All 15 are fixed, and each is a
-  regression test in [`tests/test_codex_regressions.py`](tests/test_codex_regressions.py).
+  outliving timeouts, and launch failures being counted as kills. All 15 are fixed and covered in
+  [`tests/test_codex_regressions.py`](tests/test_codex_regressions.py). A second pass fact-checked
+  this README against the code and results. It caught overstated claims and one more invariance
+  bug (subscripts in default arguments can have side effects), and all of those were corrected.
 - During development goodhart caught a hole in its own example grader: the first `hardened`
   version ran `python -m pytest` from the workspace, which a workspace `pytest.py` shadows. That
   became the `shadow-pytest` operator, and the grader now starts pytest with `python -P`.
@@ -213,11 +224,12 @@ Narrow the set with `--families`, `--operators`, and `--max-per-operator N --see
 - **Not a sandbox.** Verifiers and mutated code run as you, with your environment. Run goodhart
   in a container or VM for tasks you didn't write. The `isolated` example grader isolates the
   *test process* from the solution; it does not contain the solution.
-- **Python and pytest only**, for now. Sensitivity and invariance operators work on any Python
-  verifier; most hack operators target pytest-based graders.
+- **Python solutions only**, for now. Mutations target Python source; verifiers can be any
+  command. Most hack operators target pytest-based graders.
 - **The hack list is a floor.** Ten known-shape hacks, written by hand. A grader that blocks all
-  ten has passed ten tests, not been proven safe. A policy under optimisation pressure will search
-  harder than this.
+  ten has passed ten tests, not been proven safe.
+- **Invariance is heuristic.** The rewrites are guarded syntactically. They are not proven
+  equivalent, and code that reads its own source can tell them apart.
 - **Survivors are leads, not verdicts.** Surviving sensitivity mutants may be equivalent;
   goodhart cannot decide that in general.
 - **Three small example tasks.** The scorecard demonstrates the method. It is not a measurement

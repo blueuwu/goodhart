@@ -98,3 +98,35 @@ def test_list_command_keeps_backslashes(tmp_path):
 
     v = Verifier("v", ["{python}", r"C:\tools\check.py"])
     assert build_argv(v, tmp_path, None)[1] == r"C:\tools\check.py"
+
+
+def test_reorder_skips_subscript_defaults(tmp_path):
+    # from the README fact-check pass: `counter[0]` in a default can have effects
+    src = (
+        "class Counter:\n    n = 0\n    def __getitem__(self, i):\n        Counter.n += 1\n        return Counter.n\n"
+        "counter = Counter()\n\ndef f(x=counter[0]):\n    return x\n\ndef g(x=counter[0]):\n    return x\n"
+    )
+    assert not [m for m in _mutants(src, tmp_path, INVARIANCE) if m.operator == "reorder-functions"]
+
+
+def test_timeout_kills_grandchildren_and_returns_promptly(tmp_path):
+    import time
+
+    from goodhart.runner import run_once
+
+    marker = tmp_path / "grandchild-wrote-this"
+    grandchild = f"import time; time.sleep(3); open({str(marker)!r}, 'w').write('x')"
+    script = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "time.sleep(30)\n"
+    )
+    task = _task(tmp_path)
+    task = type(task)(**{**task.__dict__, "timeout": 1.0})
+    v = Verifier("v", ["{python}", "-c", script])
+    start = time.perf_counter()
+    r = run_once(task, v, Snapshot({}))
+    assert r.timed_out and not r.passed
+    assert time.perf_counter() - start < 10
+    time.sleep(4)
+    assert not marker.exists(), "grandchild outlived the timeout"

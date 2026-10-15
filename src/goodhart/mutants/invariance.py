@@ -125,22 +125,28 @@ def rename_locals(ctx: Context) -> Iterable[Mutant]:
                     yield m
 
 
-SAFE_DEF_TIME = (
-    ast.Constant, ast.Name, ast.Attribute, ast.Subscript, ast.Tuple, ast.Load,
-    ast.UnaryOp, ast.USub, ast.UAdd, ast.BinOp, ast.BitOr,
-)
+# Defaults are values: only constants and bare names (no subscripts or attribute
+# access, which can run arbitrary code). Annotations may also use the usual type
+# spellings: `pkg.Type`, `X[Y]`, `X | Y`.
+SAFE_DEFAULT = (ast.Constant, ast.Name, ast.Tuple, ast.Load, ast.UnaryOp, ast.USub, ast.UAdd)
+SAFE_ANNOTATION = SAFE_DEFAULT + (ast.Attribute, ast.Subscript, ast.BinOp, ast.BitOr)
+
+
+def _unsafe(expr: ast.AST, allowed: tuple[type, ...]) -> bool:
+    for n in ast.walk(expr):
+        if not isinstance(n, allowed):
+            return True
+        if isinstance(n, ast.BinOp) and not isinstance(n.op, ast.BitOr):
+            return True
+    return False
 
 
 def _def_time_unsafe(node: ast.FunctionDef) -> bool:
-    """Defaults and annotations run at definition time. Reordering is only safe when
-    they are plain names, constants and `X | Y` / `X[Y]` type expressions."""
-    for e in _def_time_exprs(node):
-        for n in ast.walk(e):
-            if not isinstance(n, SAFE_DEF_TIME):
-                return True
-            if isinstance(n, ast.BinOp) and not isinstance(n.op, ast.BitOr):
-                return True
-    return False
+    """Defaults and annotations run at definition time, so reordering two defs would
+    reorder any effects they have. Only allow expressions that have none."""
+    defaults = [*node.args.defaults, *[d for d in node.args.kw_defaults if d is not None]]
+    annotations = [e for e in _def_time_exprs(node) if all(e is not d for d in defaults)]
+    return any(_unsafe(e, SAFE_DEFAULT) for e in defaults) or any(_unsafe(e, SAFE_ANNOTATION) for e in annotations)
 
 
 def _free_refs(node: ast.FunctionDef) -> set[str]:
