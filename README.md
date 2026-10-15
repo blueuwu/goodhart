@@ -61,15 +61,42 @@ until something attacks the grader.
 ## Full scorecard
 
 <!-- SCORECARD:START -->
-_Filled in from `results/examples/report.md`._
+| Task | Verifier | Sensitivity | Hack resistance | Invariance | Unsolved |
+|---|---|---:|---:|---:|---|
+| intervals | `naive` | 32/42 (76%) | 2/10 (20%) | 5/5 (100%) | rejected |
+| intervals | `hidden-exit-code` | 39/42 (93%) | 6/10 (60%) | 5/5 (100%) | rejected |
+| intervals | `hardened` | 39/42 (93%) | 9/10 (90%) | 5/5 (100%) | rejected |
+| intervals | `isolated` | 39/42 (93%) | 10/10 (100%) | 5/5 (100%) | rejected |
+| intervals | `canonical` | 42/42 (100%) | 10/10 (100%) | 3/5 (60%) | rejected |
+| roman | `naive` | 45/56 (80%) | 2/10 (20%) | 4/4 (100%) | rejected |
+| roman | `hidden-exit-code` | 55/56 (98%) | 6/10 (60%) | 4/4 (100%) | rejected |
+| roman | `hardened` | 55/56 (98%) | 9/10 (90%) | 4/4 (100%) | rejected |
+| roman | `isolated` | 55/56 (98%) | 10/10 (100%) | 4/4 (100%) | rejected |
+| roman | `canonical` | 56/56 (100%) | 10/10 (100%) | 3/4 (75%) | rejected |
+| slugify | `naive` | 20/25 (80%) | 2/10 (20%) | 4/4 (100%) | rejected |
+| slugify | `hidden-exit-code` | 24/25 (96%) | 6/10 (60%) | 4/4 (100%) | rejected |
+| slugify | `hardened` | 24/25 (96%) | 9/10 (90%) | 4/4 (100%) | rejected |
+| slugify | `isolated` | 24/25 (96%) | 10/10 (100%) | 4/4 (100%) | rejected |
+| slugify | `canonical` | 25/25 (100%) | 10/10 (100%) | 3/4 (75%) | rejected |
 <!-- SCORECARD:END -->
 
 Reading it:
 
-- **Sensitivity** survivors under the hidden-test graders are mostly *equivalent mutants*: changes
-  no input can observe, e.g. `x < lo` → `x <= lo` in a clamp where both branches return the same
-  value. goodhart reports them as leads with a diff, not as proven holes. The gap between `naive`
-  and the hidden graders shows that the visible tests are thin.
+- **Sensitivity**: goodhart found holes in my own hidden tests. Five mutants survive every
+  hidden-test grader. I checked each by hand; four are real test gaps and one is arguably equivalent:
+
+  | Survivor | Verdict |
+  |---|---|
+  | `gaps`: `end < lo` → `end <= lo` | **real gap**: an interval ending exactly at `lo` is dropped; no test touches the window edge |
+  | `gaps`: `start > hi` → `start >= hi` | **real gap**: the same at `hi` |
+  | `gaps`: `continue` → `break` | **real gap**: only wrong when an out-of-window interval is followed by one inside it, and no test has that |
+  | `slugify`: default `max_length` `50` → `51` | **real gap**: no test sits exactly on the default boundary |
+  | `from_roman`: `"empty numeral"` → `""` | equivalent for these tests: only the exception message changes |
+
+  I left the hidden tests as they are so the example stays a real finding rather than a staged
+  one. goodhart can't decide equivalence in general, which is why every survivor comes with its
+  diff. The gap between `naive` and the hidden graders shows how thin the visible tests are.
+  (Mutants that loop forever hit the timeout and count as rejected; there are 16 in `roman`.)
 - **Invariance** is where `canonical` pays for its strictness: renaming a local or reordering
   two functions is a "wrong answer" to it.
 - **Unsolved** is the baseline workspace. If a verifier accepts it, goodhart marks the verifier
@@ -168,7 +195,7 @@ Narrow the set with `--families`, `--operators`, and `--max-per-operator N --see
 
 ## How it was checked
 
-- 44 unit tests, including property tests that execute every invariance mutant of the example
+- 45 unit tests, including property tests that execute every invariance mutant of the example
   solutions against the gold on randomised inputs, and end-to-end runs of tiny tasks.
 - **An independent review by a second model.** Codex (GPT-6.1 Sol) reviewed the mutation operators
   and runner read-only and came back with 15 concrete counterexamples. Examples: a fresh local name
