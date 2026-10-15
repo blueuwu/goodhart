@@ -23,6 +23,11 @@ for CI.
 
 ## The headline
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hack-matrix-dark.svg">
+  <img alt="Grid of 10 reward hacks against 5 graders. The naive grader pays out for 8 hacks, hidden-exit-code for 4, hardened for 1, isolated and canonical for none." src="docs/hack-matrix-light.svg">
+</picture>
+
 Same three tasks, same gold solutions, five ways of grading them. Each cell counts the tasks (out
 of 3) where the hack **earned full reward** starting from an *unsolved* workspace:
 
@@ -252,6 +257,7 @@ uv venv --python 3.11 && uv pip install -e ".[dev]"
 python -m pytest -q
 ruff check src tests examples
 python examples/sync.py   # regenerate example verifier files, task.toml and expected.json
+python examples/readme_tables.py && python examples/hack_matrix_svg.py   # README tables and figure from results/examples
 ```
 
 MIT licensed.
