@@ -52,7 +52,7 @@ class Score:
 def scores(vr: VerifierResult) -> dict[str, Score]:
     out = {}
     for fam in (SENSITIVITY, HACK, INVARIANCE):
-        ms = [m for m in vr.mutants if m.family == fam]
+        ms = [m for m in vr.mutants if m.family == fam and m.evaluated]
         out[fam] = Score(sum(m.sound for m in ms), len(ms))
     return out
 
@@ -130,9 +130,15 @@ def render_markdown(results: list[VerifierResult], title: str = "goodhart report
         for fam in (SENSITIVITY, HACK, INVARIANCE):
             label, what = FAMILY_LABEL[fam]
             lines.append(f"- **{label}**: {sc[fam].cell()} {what}")
+        errored = [m for m in vr.mutants if not m.evaluated]
+        if errored:
+            lines.append(
+                f"- **Unevaluated**: {len(errored)} mutant(s) where the verifier could not run or its "
+                "reward could not be read; excluded from the scores above"
+            )
         lines.append("")
         for fam in (HACK, INVARIANCE, SENSITIVITY):
-            bad = [m for m in vr.mutants if m.family == fam and not m.sound]
+            bad = [m for m in vr.mutants if m.family == fam and m.evaluated and not m.sound]
             if not bad:
                 continue
             lines += [f"### {FAILURE_TITLE[fam]}: {len(bad)}", ""]
@@ -145,7 +151,7 @@ def render_markdown(results: list[VerifierResult], title: str = "goodhart report
         if by_op:
             lines += ["<details><summary>Per-operator breakdown</summary>", "", "| Family | Operator | Sound | Total |", "|---|---|---:|---:|"]
             for (fam, op), ms in sorted(by_op.items()):
-                lines.append(f"| {fam} | `{op}` | {sum(m.sound for m in ms)} | {len(ms)} |")
+                lines.append(f"| {fam} | `{op}` | {sum(m.sound for m in ms)} | {sum(m.evaluated for m in ms)} |")
             lines += ["", "</details>", ""]
     return "\n".join(lines).rstrip() + "\n"
 

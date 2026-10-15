@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import ast
 import copy
+import math
 from collections.abc import Callable, Iterable, Iterator
+from functools import partial
 
 from .base import (
     SENSITIVITY,
@@ -33,11 +35,23 @@ BINOP_SWAP: dict[type, type] = {
 }
 COMPOUND = (ast.BinOp, ast.BoolOp, ast.Compare, ast.UnaryOp, ast.IfExp, ast.Lambda, ast.NamedExpr)
 
-Edit = tuple[ast.AST, str]  # node whose span is replaced, replacement text
+# (node whose span is replaced, replacement text or a deferred renderer for it)
+Edit = tuple[ast.AST, str | Callable[[], str]]
+
+
+class _Unparseable(Exception):
+    pass
+
+
+def _unparse(node: ast.AST) -> str:
+    try:
+        return ast.unparse(node)
+    except (ValueError, RecursionError) as e:  # e.g. int literals past the str-conversion limit
+        raise _Unparseable from e
 
 
 def _expr(node: ast.expr) -> str:
-    text = ast.unparse(node)
+    text = _unparse(node)
     return f"({text})" if isinstance(node, COMPOUND) else text
 
 
@@ -69,6 +83,10 @@ def _skip_ids(tree: ast.Module) -> set[int]:
     return skip
 
 
+def _negate(test: ast.expr) -> str:
+    return f"not {_expr(test)}"
+
+
 def compare_flip(tree: ast.Module) -> Iterator[Edit]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
@@ -76,7 +94,7 @@ def compare_flip(tree: ast.Module) -> Iterator[Edit]:
                 if type(op) in COMPARE_FLIP:
                     new = copy.deepcopy(node)
                     new.ops[i] = COMPARE_FLIP[type(op)]()
-                    yield node, _expr(new)
+                    yield node, partial(_expr, new)
 
 
 def binop_swap(tree: ast.Module) -> Iterator[Edit]:
@@ -84,11 +102,11 @@ def binop_swap(tree: ast.Module) -> Iterator[Edit]:
         if isinstance(node, ast.BinOp) and type(node.op) in BINOP_SWAP:
             new = copy.deepcopy(node)
             new.op = BINOP_SWAP[type(node.op)]()
-            yield node, _expr(new)
+            yield node, partial(_expr, new)
         elif isinstance(node, ast.AugAssign) and type(node.op) in BINOP_SWAP:
             new = copy.deepcopy(node)
             new.op = BINOP_SWAP[type(node.op)]()
-            yield node, ast.unparse(new)
+            yield node, partial(_unparse, new)
 
 
 def boolop_swap(tree: ast.Module) -> Iterator[Edit]:
@@ -105,13 +123,13 @@ def negate_condition(tree: ast.Module) -> Iterator[Edit]:
             test = node.test
             if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
                 continue  # covered by remove-unary
-            yield test, f"not {_expr(test)}"
+            yield test, partial(_negate, test)
 
 
 def remove_unary(tree: ast.Module) -> Iterator[Edit]:
     for node in ast.walk(tree):
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.Not, ast.USub, ast.Invert)):
-            yield node, _expr(node.operand)
+            yield node, partial(_expr, node.operand)
 
 
 def constant_perturb(tree: ast.Module) -> Iterator[Edit]:
@@ -122,8 +140,8 @@ def constant_perturb(tree: ast.Module) -> Iterator[Edit]:
         if isinstance(v, bool):
             yield node, repr(not v)
         elif isinstance(v, int):
-            yield node, repr(v + 1)
-        elif isinstance(v, float):
+            yield node, partial(repr, v + 1)  # repr of a huge int raises ValueError
+        elif isinstance(v, float) and math.isfinite(v + 1.0):
             yield node, repr(v + 1.0)
 
 
@@ -186,8 +204,12 @@ def generate(ctx: Context) -> Iterable[Mutant]:
         seen: set[str] = set()
         for op_name, (fn, desc) in OPERATORS.items():
             counts: dict[tuple[int, int], int] = {}
-            for node, text in fn(tree):
+            for node, render in fn(tree):
                 if id(node) in skip or inside(node, fstrings):
+                    continue
+                try:
+                    text = render() if callable(render) else render
+                except (_Unparseable, ValueError):
                     continue
                 a, b = splicer.span(node)
                 new_src = splicer.replace([(a, b, text)])

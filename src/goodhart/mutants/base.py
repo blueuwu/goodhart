@@ -68,9 +68,11 @@ class Splicer:
 
     def __init__(self, src: str) -> None:
         self.data = src.encode("utf-8")
+        # Python treats \n, \r\n and a lone \r as line ends; AST line numbers follow suit.
         self.line_starts = [0]
+        n = len(self.data)
         for i, b in enumerate(self.data):
-            if b == 0x0A:
+            if b == 0x0A or (b == 0x0D and (i + 1 >= n or self.data[i + 1] != 0x0A)):
                 self.line_starts.append(i + 1)
 
     def offset(self, lineno: int, col: int) -> int:

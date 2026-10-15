@@ -2,6 +2,10 @@
 
 A verifier that rejects one of these is grading the shape of the reference
 solution, not what it does, so it will also reject valid alternative solutions.
+
+"Behaviour" here means what the code computes. Code that reads its own source
+(`inspect.getsource`, `open(__file__)`) can tell a comment was added or the
+file reformatted; for such solutions those operators are not invariant.
 """
 
 from __future__ import annotations
@@ -20,10 +24,22 @@ def _mutant(ctx: Context, op: str, target: str, desc: str, edits: list[tuple[str
     return Mutant(id=f"{op}:{target}", family=INVARIANCE, operator=op, description=desc, edits=tuple(edits))
 
 
+def _same_ast(a: str, b: str) -> bool:
+    try:
+        return ast.dump(ast.parse(a)) == ast.dump(ast.parse(b))
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+
+
 def reformat(ctx: Context) -> Iterable[Mutant]:
     for rel, src, tree in ctx.editable_sources():
-        new = ast.unparse(tree) + "\n"
-        if new != src:
+        try:
+            new = ast.unparse(tree) + "\n"
+        except (ValueError, RecursionError):  # e.g. int literals past the str-conversion limit
+            continue
+        # ast.unparse does not round-trip everything (NFKC-normalised identifiers can
+        # turn into keywords), so only keep output that parses back to the same tree.
+        if new != src and _same_ast(src, new):
             m = _mutant(ctx, "reformat", rel, "re-emit the module through ast.unparse (drops comments, normalises quoting and spacing)", [(rel, new.encode())])
             if m:
                 yield m
@@ -33,6 +49,23 @@ def _body_nodes(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
     """Nodes in the function body only: defaults, annotations and decorators are
     evaluated in the enclosing scope and must not be renamed."""
     return [n for stmt in fn.body for n in ast.walk(stmt)]
+
+
+IDENT_FIELDS = ("id", "arg", "name", "asname", "attr")
+
+
+def _identifiers(tree: ast.AST) -> set[str]:
+    """Every identifier the module spells anywhere, so fresh names never collide."""
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        for field in IDENT_FIELDS:
+            val = getattr(node, field, None)
+            if isinstance(val, str):
+                out.update(val.split("."))
+        names = getattr(node, "names", None)
+        if isinstance(names, list):
+            out.update(n for n in names if isinstance(n, str))
+    return out
 
 
 def _renameable(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -57,13 +90,14 @@ def _renameable(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
             excluded.update((a.asname or a.name).split(".")[0] for a in node.names)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             stored.add(node.id)
-    return stored - params - excluded
+    # Dunder-prefixed names are mangled inside classes, and `__class__` feeds
+    # zero-argument super(); neither survives a rename unchanged.
+    return {n for n in stored - params - excluded if not n.startswith("__")}
 
 
 def rename_locals(ctx: Context) -> Iterable[Mutant]:
     for rel, src, tree in ctx.editable_sources():
-        taken = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-        taken |= {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}
+        taken = _identifiers(tree)
         sp = Splicer(src)
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -76,6 +110,7 @@ def rename_locals(ctx: Context) -> Iterable[Mutant]:
                 new = f"{name}_"
                 while new in taken:
                     new += "_"
+                taken.add(new)
                 mapping[name] = new
             reps = [
                 (*sp.span(n), mapping[n.id])
@@ -90,9 +125,22 @@ def rename_locals(ctx: Context) -> Iterable[Mutant]:
                     yield m
 
 
-def _has_call(node: ast.FunctionDef) -> bool:
-    """A call in a default or annotation runs at definition time; reordering would reorder its effects."""
-    return any(isinstance(n, ast.Call) for e in _def_time_exprs(node) for n in ast.walk(e))
+SAFE_DEF_TIME = (
+    ast.Constant, ast.Name, ast.Attribute, ast.Subscript, ast.Tuple, ast.Load,
+    ast.UnaryOp, ast.USub, ast.UAdd, ast.BinOp, ast.BitOr,
+)
+
+
+def _def_time_unsafe(node: ast.FunctionDef) -> bool:
+    """Defaults and annotations run at definition time. Reordering is only safe when
+    they are plain names, constants and `X | Y` / `X[Y]` type expressions."""
+    for e in _def_time_exprs(node):
+        for n in ast.walk(e):
+            if not isinstance(n, SAFE_DEF_TIME):
+                return True
+            if isinstance(n, ast.BinOp) and not isinstance(n.op, ast.BitOr):
+                return True
+    return False
 
 
 def _free_refs(node: ast.FunctionDef) -> set[str]:
@@ -127,7 +175,9 @@ def reorder_functions(ctx: Context) -> Iterable[Mutant]:
             if len(run) < 2:
                 continue
             names = {f.name for f in run}
-            if any(_free_refs(f) & names or _has_call(f) for f in run):
+            if len(names) < len(run):
+                continue  # a later duplicate def wins; reordering would change which one
+            if any(_free_refs(f) & names or _def_time_unsafe(f) for f in run):
                 continue
             texts = [sp.segment(f) for f in run]
             for f, text in zip(run, reversed(texts), strict=True):

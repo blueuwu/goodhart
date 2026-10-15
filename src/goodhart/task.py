@@ -19,7 +19,7 @@ class TaskError(ValueError):
 @dataclass(frozen=True)
 class Verifier:
     name: str
-    command: str
+    command: str | list[str]
     reward: str = "exit-code"
     threshold: float = 1.0
     description: str = ""
@@ -113,8 +113,9 @@ def load_task(path: Path) -> Task:
         raise TaskError(f"{toml_path}: at least one [verifiers.<name>] table is required")
     verifiers = []
     for vname, v in raw_verifiers.items():
-        if not isinstance(v, dict) or not isinstance(v.get("command"), str):
-            raise TaskError(f"{toml_path}: verifiers.{vname}.command must be a string")
+        cmd = v.get("command") if isinstance(v, dict) else None
+        if not (isinstance(cmd, str) or (isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd))):
+            raise TaskError(f"{toml_path}: verifiers.{vname}.command must be a string or a list of strings")
         reward = v.get("reward", "exit-code")
         if reward not in REWARD_MODES:
             raise TaskError(f"{toml_path}: verifiers.{vname}.reward must be one of {REWARD_MODES}")

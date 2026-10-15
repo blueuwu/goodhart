@@ -8,9 +8,11 @@ VM if the tasks are not your own.
 from __future__ import annotations
 
 import difflib
+import math
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,7 @@ class RunResult:
     duration: float
     output_tail: str
     error: str = ""
+    infra_error: bool = False  # the verifier could not be run or its reward could not be read
 
 
 @dataclass
@@ -46,9 +49,13 @@ class MutantResult:
     diff: str = ""
 
     @property
+    def evaluated(self) -> bool:
+        return not self.run.infra_error
+
+    @property
     def sound(self) -> bool:
-        """True when the verifier did the right thing with this mutant."""
-        return self.run.passed == self.should_pass
+        """True when the verifier did the right thing with this mutant (False if unevaluated)."""
+        return self.evaluated and self.run.passed == self.should_pass
 
 
 @dataclass
@@ -101,28 +108,79 @@ def build_argv(verifier: Verifier, workspace: Path, verifier_dir: Path | None) -
         "workspace": str(workspace),
         "verifier": str(verifier_dir) if verifier_dir else "",
     }
+    # A string command is split POSIX-style (backslashes escape), so Windows users
+    # should write `{verifier}/check.py` or give `command` as a list of arguments.
+    tokens = verifier.command if isinstance(verifier.command, list) else shlex.split(verifier.command, posix=True)
     argv = []
-    for tok in shlex.split(verifier.command, posix=True):
+    for tok in tokens:
         for key, val in subs.items():
             tok = tok.replace("{" + key + "}", val)
         argv.append(tok)
     return argv
 
 
-def _reward(verifier: Verifier, proc: subprocess.CompletedProcess[str]) -> tuple[float, str]:
+def _reward(verifier: Verifier, returncode: int, stdout: str) -> tuple[float | None, str]:
+    """Returns (reward, error). reward is None when the verifier's output could not be read."""
     if verifier.reward == "exit-code":
-        return (1.0 if proc.returncode == 0 else 0.0), ""
-    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        return (1.0 if returncode == 0 else 0.0), ""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
     if not lines:
-        return 0.0, "no stdout to read a reward from"
+        return None, "no stdout to read a reward from"
     try:
-        return float(lines[-1]), ""
+        value = float(lines[-1])
     except ValueError:
-        return 0.0, f"last stdout line is not a float: {lines[-1][:80]!r}"
+        return None, f"last stdout line is not a float: {lines[-1][:80]!r}"
+    if not math.isfinite(value):
+        return None, f"reward is not finite: {lines[-1][:80]!r}"
+    return value, ""
 
 
 def _tail(text: str, n: int = 1500) -> str:
     return text if len(text) <= n else "..." + text[-n:]
+
+
+class _Job:
+    """Windows Job Object: every process the verifier spawns joins it, so one call kills the tree."""
+
+    def __init__(self, proc: subprocess.Popen[bytes]) -> None:
+        import ctypes
+
+        self.k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        self.k32.CreateJobObjectW.restype = ctypes.c_void_p
+        self.handle = self.k32.CreateJobObjectW(None, None)
+        if self.handle:
+            self.k32.AssignProcessToJobObject(ctypes.c_void_p(self.handle), ctypes.c_void_p(int(proc._handle)))  # type: ignore[attr-defined]
+
+    def kill(self) -> None:
+        import ctypes
+
+        if self.handle:
+            self.k32.TerminateJobObject(ctypes.c_void_p(self.handle), 1)
+            self.k32.CloseHandle(ctypes.c_void_p(self.handle))
+            self.handle = None
+
+
+def _kill_tree(proc: subprocess.Popen[bytes], job: _Job | None) -> None:
+    if job is not None:
+        job.kill()
+    elif os.name != "nt":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    proc.wait()
+
+
+def _rmtree(path: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            return
+        time.sleep(0.2)
 
 
 def run_once(task: Task, verifier: Verifier, snap: Snapshot) -> RunResult:
@@ -143,24 +201,38 @@ def run_once(task: Task, verifier: Verifier, snap: Snapshot) -> RunResult:
             GOODHART_VERIFIER=str(vdir or ""),
         )
         argv = build_argv(verifier, ws, vdir)
+        # Output goes to files, not pipes: a grandchild that inherits a pipe would
+        # otherwise hold the run open past the timeout.
+        out_path, err_path = tmp / "stdout.txt", tmp / "stderr.txt"
         start = time.perf_counter()
-        try:
-            proc = subprocess.run(
-                argv, cwd=ws, env=env, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=task.timeout,
-            )
-        except subprocess.TimeoutExpired as e:
-            out = (e.stdout or b"") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            text = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
-            return RunResult(0.0, False, None, True, time.perf_counter() - start, _tail(text), "timeout")
-        except OSError as e:
-            return RunResult(0.0, False, None, False, time.perf_counter() - start, "", f"could not start verifier: {e}")
+        with open(out_path, "wb") as out_f, open(err_path, "wb") as err_f:
+            try:
+                proc = subprocess.Popen(
+                    argv, cwd=ws, env=env, stdin=subprocess.DEVNULL, stdout=out_f, stderr=err_f,
+                    start_new_session=(os.name != "nt"),
+                    creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                )
+            except OSError as e:
+                return RunResult(0.0, False, None, False, 0.0, "", f"could not start verifier: {e}", infra_error=True)
+            job = _Job(proc) if os.name == "nt" else None
+            timed_out = False
+            try:
+                proc.wait(timeout=task.timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            _kill_tree(proc, job)  # also reaps stragglers the verifier left behind
         duration = time.perf_counter() - start
-        reward, err = _reward(verifier, proc)
-        output = (proc.stdout or "") + (("\n[stderr]\n" + proc.stderr) if proc.stderr else "")
-        return RunResult(reward, reward >= verifier.threshold, proc.returncode, False, duration, _tail(output), err)
+        stdout = out_path.read_text(encoding="utf-8", errors="replace")
+        stderr = err_path.read_text(encoding="utf-8", errors="replace")
+        output = _tail(stdout + (("\n[stderr]\n" + stderr) if stderr else ""))
+        if timed_out:
+            return RunResult(0.0, False, None, True, duration, output, "timeout")
+        reward, err = _reward(verifier, proc.returncode, stdout)
+        if reward is None:
+            return RunResult(0.0, False, proc.returncode, False, duration, output, err, infra_error=True)
+        return RunResult(reward, reward >= verifier.threshold, proc.returncode, False, duration, output)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _rmtree(tmp)
 
 
 def run_verifier(
