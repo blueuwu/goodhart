@@ -267,3 +267,22 @@ def run_verifier(
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         result.mutants = list(pool.map(one, mutants))
     return result
+
+
+def load_verifier_result(d: dict) -> VerifierResult:
+    """Inverse of VerifierResult.to_json (extra keys such as scores are ignored)."""
+    fields = set(RunResult.__dataclass_fields__)
+
+    def run(r: dict) -> RunResult:
+        return RunResult(**{k: v for k, v in r.items() if k in fields})
+
+    vr = VerifierResult(
+        task=d["task"], verifier=d["verifier"], description=d.get("description", ""),
+        gold_runs=[run(r) for r in d["gold_runs"]], baseline=run(d["baseline"]),
+    )
+    vr.mutants = [
+        MutantResult(m["mutant_id"], m["family"], m["operator"], m["description"], m["should_pass"],
+                     run(m["run"]), m.get("diff", ""))
+        for m in d["mutants"]
+    ]
+    return vr

@@ -145,3 +145,15 @@ def test_bad_task_toml(tmp_path):
     with pytest.raises(TaskError):
         load_task(tmp_path)
     assert main(["run", str(tmp_path), "-q"]) == 2
+
+
+def test_render_round_trips_results_json(tiny, tmp_path):
+    out = tmp_path / "out"
+    # exit 1: the weak verifier also accepts the unsolved baseline, so it is flagged vacuous
+    assert main(["run", str(tiny), "--verifier", "weak", "--gold-runs", "1", "-q", "--out", str(out),
+                 "--families", "sensitivity"]) == 1
+    before = (out / "report.md").read_text()
+    (out / "report.md").unlink()
+    assert main(["render", str(out / "results.json")]) == 0
+    assert (out / "report.md").read_text() == before
+    assert "<table>" in (out / "report.html").read_text()

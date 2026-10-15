@@ -1,0 +1,38 @@
+name: goodhart
+description: Mutation-test RL verifiers. Fail the build when a grader rewards hacks or rejects equivalent solutions.
+branding:
+  icon: shield
+  color: orange
+inputs:
+  paths:
+    description: Task directories or folders containing task.toml files (space-separated)
+    required: true
+  args:
+    description: Extra arguments for `goodhart run`, e.g. "--verifier hardened --min-hack-resistance 1.0"
+    required: false
+    default: ""
+  out:
+    description: Where to write report.md, report.html and results.json
+    required: false
+    default: goodhart-report
+  python-version:
+    description: Python used to run goodhart and the verifiers
+    required: false
+    default: "3.11"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}" pytest
+    - shell: bash
+      run: |
+        set +e
+        python -m goodhart run ${{ inputs.paths }} --out "${{ inputs.out }}" ${{ inputs.args }}
+        code=$?
+        if [ -f "${{ inputs.out }}/report.md" ]; then
+          sed -n '1,/^## /p' "${{ inputs.out }}/report.md" | sed '$d' >> "$GITHUB_STEP_SUMMARY"
+        fi
+        exit $code

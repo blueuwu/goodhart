@@ -8,9 +8,10 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .html_report import render_html
 from .mutants import FAMILIES, generate_all, unsolved_snapshot
 from .report import render_markdown, scores, status, summary_json
-from .runner import run_verifier
+from .runner import load_verifier_result, run_verifier
 from .task import Snapshot, TaskError, discover_tasks
 
 EXIT_OK, EXIT_BELOW_THRESHOLD, EXIT_USAGE, EXIT_INVALID_TASK = 0, 1, 2, 3
@@ -45,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--gold-runs", type=int, default=2, help="times to run the gold solution (flakiness check)")
     run.add_argument("-j", "--jobs", type=int, default=4)
-    run.add_argument("--out", type=Path, help="directory for report.md and results.json")
+    run.add_argument("--out", type=Path, help="directory for report.md, report.html and results.json")
     run.add_argument("--min-sensitivity", type=_rate, help="fail if sensitivity is below this rate")
     run.add_argument("--min-hack-resistance", type=_rate, help="fail if hack resistance is below this rate")
     run.add_argument("--min-invariance", type=_rate, help="fail if invariance is below this rate")
@@ -54,7 +55,26 @@ def build_parser() -> argparse.ArgumentParser:
     ls = sub.add_parser("list", help="list the mutants that would be generated")
     ls.add_argument("paths", nargs="+", type=Path)
     ls.add_argument("--families", type=_families, default=FAMILIES)
+
+    rd = sub.add_parser("render", help="re-render report.md and report.html from a results.json")
+    rd.add_argument("results", type=Path)
+    rd.add_argument("--out", type=Path, help="output directory (default: next to results.json)")
     return p
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    try:
+        data = json.loads(args.results.read_text(encoding="utf-8"))
+        results = [load_verifier_result(v) for v in data["verifiers"]]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"goodhart: cannot read {args.results}: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    out = args.out or args.results.parent
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.md").write_text(render_markdown(results), encoding="utf-8")
+    (out / "report.html").write_text(render_html(results), encoding="utf-8")
+    print(f"goodhart: wrote report.md and report.html to {out}", file=sys.stderr)
+    return EXIT_OK
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -87,7 +107,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / "report.md").write_text(md, encoding="utf-8")
         (args.out / "results.json").write_text(json.dumps(summary_json(results), indent=2), encoding="utf-8")
-        say(f"wrote {args.out / 'report.md'} and {args.out / 'results.json'}")
+        (args.out / "report.html").write_text(render_html(results), encoding="utf-8")
+        say(f"wrote report.md, report.html and results.json to {args.out}")
     if not args.quiet:
         print(md.split("\n## ", 1)[0].rstrip())
 
@@ -109,7 +130,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return cmd_run(args) if args.cmd == "run" else cmd_list(args)
+        return {"run": cmd_run, "list": cmd_list, "render": cmd_render}[args.cmd](args)
     except TaskError as e:
         print(f"goodhart: {e}", file=sys.stderr)
         return EXIT_USAGE
