@@ -1,0 +1,23 @@
+{
+  "tests": [
+    "hidden.test_intervals_hidden::test_gaps_all",
+    "hidden.test_intervals_hidden::test_gaps_edges",
+    "hidden.test_intervals_hidden::test_gaps_none",
+    "hidden.test_intervals_hidden::test_gaps_outside_window",
+    "hidden.test_intervals_hidden::test_gaps_partial_overlap_low",
+    "hidden.test_intervals_hidden::test_merge_contained",
+    "hidden.test_intervals_hidden::test_merge_empty",
+    "hidden.test_intervals_hidden::test_merge_not_touching",
+    "hidden.test_intervals_hidden::test_merge_rejects_reversed",
+    "hidden.test_intervals_hidden::test_merge_single_point",
+    "hidden.test_intervals_hidden::test_merge_touching",
+    "hidden.test_intervals_hidden::test_merge_unsorted_chain",
+    "hidden.test_intervals_hidden::test_total_length"
+  ],
+  "modules": [
+    "intervals"
+  ],
+  "canonical": {
+    "intervals.py": "e2abc096b3d721c51c7d1997726f1e03d29b7a9fe59535b19e92603a625f3d71"
+  }
+}

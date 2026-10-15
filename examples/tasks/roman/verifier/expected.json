@@ -1,0 +1,39 @@
+{
+  "tests": [
+    "hidden.test_roman_hidden::test_from_roman_rejects[ABC]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[IC]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[IIII]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[MMMM]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[VX]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[XIIV]",
+    "hidden.test_roman_hidden::test_from_roman_rejects[]",
+    "hidden.test_roman_hidden::test_known[1-I]",
+    "hidden.test_roman_hidden::test_known[14-XIV]",
+    "hidden.test_roman_hidden::test_known[1666-MDCLXVI]",
+    "hidden.test_roman_hidden::test_known[3-III]",
+    "hidden.test_roman_hidden::test_known[3999-MMMCMXCIX]",
+    "hidden.test_roman_hidden::test_known[4-IV]",
+    "hidden.test_roman_hidden::test_known[40-XL]",
+    "hidden.test_roman_hidden::test_known[400-CD]",
+    "hidden.test_roman_hidden::test_known[44-XLIV]",
+    "hidden.test_roman_hidden::test_known[444-CDXLIV]",
+    "hidden.test_roman_hidden::test_known[5-V]",
+    "hidden.test_roman_hidden::test_known[9-IX]",
+    "hidden.test_roman_hidden::test_known[90-XC]",
+    "hidden.test_roman_hidden::test_known[900-CM]",
+    "hidden.test_roman_hidden::test_lowercase_accepted",
+    "hidden.test_roman_hidden::test_round_trip_all",
+    "hidden.test_roman_hidden::test_to_roman_rejects[-1]",
+    "hidden.test_roman_hidden::test_to_roman_rejects[0]",
+    "hidden.test_roman_hidden::test_to_roman_rejects[2.5]",
+    "hidden.test_roman_hidden::test_to_roman_rejects[4000]",
+    "hidden.test_roman_hidden::test_to_roman_rejects[7]",
+    "hidden.test_roman_hidden::test_to_roman_rejects[True]"
+  ],
+  "modules": [
+    "roman"
+  ],
+  "canonical": {
+    "roman.py": "eaba3626af4c1baedd79187f440336a32a1ebc187bccb57fe1beefa3c67050d8"
+  }
+}

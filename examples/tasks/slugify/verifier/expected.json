@@ -1,0 +1,23 @@
+{
+  "tests": [
+    "hidden.test_slugify_hidden::test_cases[  leading and trailing  -leading-and-trailing]",
+    "hidden.test_slugify_hidden::test_cases[!!!-]",
+    "hidden.test_slugify_hidden::test_cases[-]",
+    "hidden.test_slugify_hidden::test_cases[ALL CAPS 2024-all-caps-2024]",
+    "hidden.test_slugify_hidden::test_cases[Caf\\xe9 d\\xe9j\\xe0 vu-cafe-deja-vu]",
+    "hidden.test_slugify_hidden::test_cases[Hello World-hello-world]",
+    "hidden.test_slugify_hidden::test_cases[Rust, Go & Python!-rust-go-python]",
+    "hidden.test_slugify_hidden::test_cases[a--b__c-a-b-c]",
+    "hidden.test_slugify_hidden::test_custom_separator",
+    "hidden.test_slugify_hidden::test_cut_at_word_boundary",
+    "hidden.test_slugify_hidden::test_default_max_length",
+    "hidden.test_slugify_hidden::test_exact_fit",
+    "hidden.test_slugify_hidden::test_single_long_word_is_truncated"
+  ],
+  "modules": [
+    "slugify"
+  ],
+  "canonical": {
+    "slugify.py": "305470c924d0f672fa0140b6764acc78f44f43dddf1935ab378c04d1a7ac1278"
+  }
+}
