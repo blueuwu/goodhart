@@ -22,7 +22,9 @@ It is still not a sandbox: the worker runs with the user's permissions.
 
 --canonical additionally requires each named workspace file to parse to the
 same AST as the reference solution. That is deliberately over-fit: it exists
-so the examples include a verifier that rejects valid rewrites.
+so the examples include a verifier that rejects valid rewrites. The stored digests
+are ast.dump output, which can change between Python versions: rerun
+examples/sync.py under the interpreter you grade with.
 """
 
 import argparse
